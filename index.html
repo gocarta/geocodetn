@@ -6,6 +6,9 @@
         <script src="./public/assets/js/easy-file-saver.js"></script>
         <script>
             window.app = {
+                config: {
+                    use_zip_code: window.location.search.indexOf("use_zip_code=false") === -1
+                },
                 data: {
                     addresses: null
                 },
@@ -38,15 +41,23 @@
         <input type="file" id="input-file">
         <button onclick="app.funcs.download()">Download</button>
         <script>
+            function normalize_street_name(street_name) {;
+                street_name = street_name.trim().replace(/  /g, ' ').toUpperCase();
+                street_name = street_name.replace(/AV(E?)\.?$/, "AV");
+                street_name = street_name.replace(/ST\.$/, "ST");
+                street_name = street_name.replace(/DR\.$/, "DR");                
+                return street_name;
+            }
+
             app.data.addresses = (async function load_addresses() {
                 const r = await fetch("https://gocarta.s3.us-east-2.amazonaws.com/public/data/tn_ng911_address_points/v1/data.json");
                 const data = await r.json();
 
                 const addresses_normalized = {};
                 data.forEach(function (row) {
-                    const StNam_Full = row.StNam_Full.replace(/  /g, ' ').toUpperCase();
+                    const street_name = normalize_street_name(row.StNam_Full);
 
-                    const key = JSON.stringify([row.Add_Number.toString().toUpperCase(), StNam_Full, row.Zip_Code.toUpperCase()]);
+                    const key = JSON.stringify([row.Add_Number.toString().toUpperCase(), street_name, app.config.use_zip_code && row.Zip_Code.toUpperCase()]);
                     addresses_normalized[key] = row;
                 });
                 console.log("addresses_normalized:", addresses_normalized);
@@ -73,7 +84,7 @@
                 out.street_number = street_number.trim().toUpperCase();
 
                 // normalize street_name
-                out.street_name = street_name.trim().toUpperCase();
+                out.street_name = normalize_street_name(street_name);
 
                 return out;
             }
@@ -95,6 +106,8 @@
 
                     // console.log("rows:", rows);
                     
+                    // const not_found = new Set();
+                    
                     const results = [];
 
                     let from_found = 0;
@@ -114,7 +127,7 @@
                         // console.log(parsed); 
 
                         // lookup in TN NG 911
-                        const from_normalized = JSON.stringify([from_parsed.street_number, from_parsed.street_name, row["From Zip Code"].toString()]);
+                        const from_normalized = JSON.stringify([from_parsed.street_number, from_parsed.street_name, app.config.use_zip_code && row["From Zip Code"].toString()]);
 
                         // look it up
                         if (from_normalized in addresses_by_key) {
@@ -124,6 +137,7 @@
                             row["From Longitude"] = from_match.Longitude;
                         } else {
                             from_not_found++;
+                            // not_found.add(from_normalized);
                             row["From Latitude"] = "";
                             row["From Longitude"] = "";
                         }
@@ -138,7 +152,7 @@
                         // console.log(parsed); 
 
                         // lookup in TN NG 911
-                        const to_normalized = JSON.stringify([to_parsed.street_number, to_parsed.street_name, row["To Zip Code"].toString()]);
+                        const to_normalized = JSON.stringify([to_parsed.street_number, to_parsed.street_name, app.config.use_zip_code && row["To Zip Code"].toString()]);
 
                         // look it up
                         if (to_normalized in addresses_by_key) {
@@ -147,6 +161,7 @@
                             row["To Latitude"] = to_match.Latitude;
                             row["To Longitude"] = to_match.Longitude;
                         } else {
+                            // not_found.add(to_normalized);
                             to_not_found++;
                             row["To Latitude"] = "";
                             row["To Longitude"] = "";
@@ -154,6 +169,7 @@
 
                         results.push(row);
                     });
+                    // app.state.not_found = not_found;
                     console.log({from_found, from_not_found, to_found, to_not_found});
 
                     app.state.out = Papa.unparse(results, { header: true });
