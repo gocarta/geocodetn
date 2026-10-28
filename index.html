@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <tile>geocodetn</tile>
+        <script src="./public/assets/js/papaparse.min.js"></script>
+        <script src="./public/assets/js/easy-file-saver.js"></script>
+        <script>
+            window.app = {
+                data: {
+                    addresses: null
+                },
+                funcs: {
+                    download: function download() {
+                        console.log("calling download");
+
+                        const blob = new Blob([app.state.out], { type: 'text/csv' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = "results.csv";
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                    }
+                },
+                state: {
+                    out: null
+                }
+            };
+        </script>
+    </head>
+    <body>
+        <h1>geocodetn</h1>
+        <h2>GeoCode CSV Files about Tennessee</h2>
+        <label>
+            Upload File
+        </label>
+        <input type="file" id="input-file">
+        <button onclick="app.funcs.download()">Download</button>
+        <script>
+            app.data.addresses = (async function load_addresses() {
+                const r = await fetch("https://gocarta.s3.us-east-2.amazonaws.com/public/data/tn_ng911_address_points/v1/data.json");
+                const data = await r.json();
+
+                const addresses_normalized = {};
+                data.forEach(function (row) {
+                    const StNam_Full = row.StNam_Full.replace(/  /g, ' ').toUpperCase();
+
+                    const key = JSON.stringify([row.Add_Number.toString().toUpperCase(), StNam_Full, row.Zip_Code.toUpperCase()]);
+                    addresses_normalized[key] = row;
+                });
+                console.log("addresses_normalized:", addresses_normalized);
+                return addresses_normalized;
+            })();
+            
+            
+            function parse_address(address) {
+                address = address.toUpperCase();
+
+                const out = {};
+                if (address.includes(":")) {
+                    out.name = address.split(':')[0];
+                    address = address.split(":")[1];
+                }
+
+                if (!address.includes(",")) {
+                    throw Exception("UH OH! address doesn't have a comma", address);
+                }
+
+                let [street_number, street_name] = address.split(",");
+
+                // normalize street_number
+                out.street_number = street_number.trim().toUpperCase();
+
+                // normalize street_name
+                out.street_name = street_name.trim().toUpperCase();
+
+                return out;
+            }
+            
+            document.getElementById("input-file").addEventListener("input", function (evt) {
+                (async function () {
+                    const addresses_by_key = await app.data.addresses;
+
+                    const file = evt.target.files[0];
+
+                    const rows = await new Promise(function (resolve) {
+                        Papa.parse(file, {
+                            header: true,
+                            complete: function(results) {
+                                resolve(results.data);
+                            }                    
+                        });
+                    });
+
+                    // console.log("rows:", rows);
+                    
+                    const results = [];
+
+                    let from_found = 0;
+                    let from_not_found = 0;
+                    let to_found = 0;
+                    let to_not_found = 0;
+
+                    // go through rows and try to find a match
+                    rows.forEach(function (row) {
+                        const from = row["From"];
+                        // console.log(from);
+
+                        if (!from) return;
+
+                        // normalize string
+                        const from_parsed = parse_address(from);
+                        // console.log(parsed); 
+
+                        // lookup in TN NG 911
+                        const from_normalized = JSON.stringify([from_parsed.street_number, from_parsed.street_name, row["From Zip Code"].toString()]);
+
+                        // look it up
+                        if (from_normalized in addresses_by_key) {
+                            from_found++;
+                            const from_match = addresses_by_key[from_normalized];
+                            row["From Latitude"] = from_match.Latitude;
+                            row["From Longitude"] = from_match.Longitude;
+                        } else {
+                            from_not_found++;
+                            row["From Latitude"] = "";
+                            row["From Longitude"] = "";
+                        }
+
+                        const to = row["To"];
+                        // console.log(from);
+
+                        if (!to) return;
+
+                        // normalize string
+                        const to_parsed = parse_address(to);
+                        // console.log(parsed); 
+
+                        // lookup in TN NG 911
+                        const to_normalized = JSON.stringify([to_parsed.street_number, to_parsed.street_name, row["To Zip Code"].toString()]);
+
+                        // look it up
+                        if (to_normalized in addresses_by_key) {
+                            to_found++;
+                            const to_match = addresses_by_key[to_normalized];
+                            row["To Latitude"] = to_match.Latitude;
+                            row["To Longitude"] = to_match.Longitude;
+                        } else {
+                            to_not_found++;
+                            row["To Latitude"] = "";
+                            row["To Longitude"] = "";
+                        }
+
+                        results.push(row);
+                    });
+                    console.log({from_found, from_not_found, to_found, to_not_found});
+
+                    app.state.out = Papa.unparse(results, { header: true });
+                })();
+            });
+        </script>
+    </body>
+</html>
